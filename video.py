@@ -354,3 +354,96 @@ def create_frame(
     bg = draw_footer(bg)
 
     return bg
+    # ==========================================
+# Render Video
+# ==========================================
+
+def create_video(
+
+    image_path,
+
+    audio_path,
+
+    title,
+
+    summary,
+
+    output_path
+
+):
+
+    audio = AudioFileClip(audio_path)
+
+    duration = audio.duration
+
+
+    def make_frame(t):
+
+        progress = min(
+            1.0,
+            t / duration
+        )
+
+        frame = create_frame(
+
+            image_path,
+
+            title,
+
+            summary,
+
+            progress
+
+        )
+
+        return np.array(frame)
+
+
+    video = VideoClip(
+
+        make_frame,
+
+        duration=duration
+
+    )
+
+    video = video.with_audio(audio)
+
+    video.write_videofile(
+
+        output_path,
+
+        fps=30,
+
+        codec="libx264",
+
+        audio_codec="aac",
+
+        preset="medium",
+
+        threads=2
+
+    )
+
+    audio.close()
+
+    video.close()
+    # ==========================================
+# Test
+# ==========================================
+
+if __name__ == "__main__":
+
+    create_video(
+
+        "assets/news.jpg",
+
+        "assets/voice.mp3",
+
+        "ලෝකයේ නවතම පුවත",
+
+        "මෙය පරීක්ෂණයක් සඳහා පමණි.",
+
+        "output/video.mp4"
+
+    )
