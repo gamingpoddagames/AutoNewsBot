@@ -106,8 +106,18 @@ def load_used(file):
 
     if os.path.exists(file):
 
-        with open(file, "r", encoding="utf8") as f:
-            return json.load(f)
+        try:
+
+            with open(file, "r", encoding="utf8") as f:
+
+                data = json.load(f)
+
+                if isinstance(data, list):
+                    return data
+
+        except Exception:
+
+            print("used.json damaged. Resetting...")
 
     return []
 
