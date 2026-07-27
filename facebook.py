@@ -1,10 +1,13 @@
 import os
 import requests
 
+
 GRAPH_VERSION = "v22.0"
 
 PAGE_ID = os.getenv("FB_PAGE_ID")
 PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
+
+
 # ==========================================
 # Create Caption
 # ==========================================
@@ -12,20 +15,19 @@ PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN")
 def make_caption(news):
 
     caption = f"""
+{news['title_si']}
 
-{news["title_si"]}
+{news['summary_si']}
 
-{news["summary_si"]}
-
-🌍 World News in Sinhala
-
-{news["link"]}
-
+🌍 Global Pulse 24/7
 """
 
     return caption
-  # ==========================================
-# Upload Video
+
+
+
+# ==========================================
+# Upload Video To Facebook Page
 # ==========================================
 
 def upload_video(video_path, caption):
@@ -36,46 +38,65 @@ def upload_video(video_path, caption):
 
         return False
 
-    url = f"https://graph.facebook.com/{GRAPH_VERSION}/{PAGE_ID}/videos"
 
-    data = {
+    url = (
+        f"https://graph.facebook.com/"
+        f"{GRAPH_VERSION}/"
+        f"{PAGE_ID}/videos"
+    )
 
-        "description": caption,
-
-        "access_token": PAGE_TOKEN
-
-    }
 
     try:
 
-        with open(video_path,"rb") as video:
+        with open(video_path, "rb") as video:
 
             files = {
-
                 "source": video
+            }
+
+
+            data = {
+
+                "description": caption,
+
+                "access_token": PAGE_TOKEN
 
             }
 
-            r = requests.post(
+
+            response = requests.post(
 
                 url,
 
-                data=data,
-
                 files=files,
+
+                data=data,
 
                 timeout=600
 
             )
 
-        print(r.text)
 
-        return r.status_code == 200
+        print(response.text)
+
+
+        if response.status_code == 200:
+
+            return True
+
+
+        return False
+
 
     except Exception as e:
 
-        print(e)
-      # ==========================================
+        print("Facebook Error:", e)
+
+        return False
+
+
+
+# ==========================================
 # Upload News
 # ==========================================
 
@@ -90,24 +111,32 @@ def upload_news(video_path, news):
         caption
 
     )
-  if __name__ == "__main__":
 
-    news = {
 
-        "title_si":"Test",
 
-        "summary_si":"Facebook Upload Test",
+# ==========================================
+# Test
+# ==========================================
 
-        "link":"https://google.com"
+if __name__ == "__main__":
+
+    test_news = {
+
+        "title_si": "Test News",
+
+        "summary_si": "Facebook upload test"
 
     }
 
-    upload_news(
 
-        "output/video.mp4",
+    print(
 
-        news
+        upload_news(
+
+            "output/news.mp4",
+
+            test_news
+
+        )
 
     )
-
-        return False
