@@ -117,3 +117,240 @@ def draw_breaking(draw):
         fill="white"
 
     )
+    # ==========================================
+# Draw Main News Image
+# ==========================================
+
+def draw_news_image(canvas, image_path, progress):
+
+    original = Image.open(image_path).convert("RGB")
+
+    # Smooth zoom animation
+    zoom = 1.0 + progress * 0.04
+
+    crop_w = int(original.width / zoom)
+    crop_h = int(original.height / zoom)
+
+    left = (original.width - crop_w) // 2
+    top = (original.height - crop_h) // 2
+
+    original = original.crop((
+        left,
+        top,
+        left + crop_w,
+        top + crop_h
+    ))
+
+    photo = cover_resize(
+        original,
+        (980,700)
+    )
+
+    mask = Image.new("L",(980,700),0)
+
+    mdraw = ImageDraw.Draw(mask)
+
+    mdraw.rounded_rectangle(
+        (0,0,980,700),
+        radius=40,
+        fill=255
+    )
+
+    canvas.paste(
+        photo,
+        (50,360),
+        mask
+    )
+
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle(
+        (50,360,1030,1060),
+        radius=40,
+        outline="white",
+        width=4
+    )
+
+    return canvas
+    # ==========================================
+# Draw Text Panel
+# ==========================================
+
+def draw_panel(canvas):
+
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle(
+
+        (40,1110,1040,1860),
+
+        radius=40,
+
+        fill=(5,12,30)
+
+    )
+
+    return canvas
+    # ==========================================
+# Draw News Title
+# ==========================================
+
+def draw_title(canvas,title):
+
+    draw = ImageDraw.Draw(canvas)
+
+    font = get_font(50,True)
+
+    draw.text(
+
+        (80,1160),
+
+        title,
+
+        font=font,
+
+        fill="white"
+
+    )
+
+    return canvas
+    # ==========================================
+# Wrap Text
+# ==========================================
+
+def wrap_text(draw, text, font, max_width):
+
+    words = text.split()
+
+    lines = []
+
+    current = ""
+
+    for word in words:
+
+        test = current + " " + word if current else word
+
+        width = draw.textlength(test, font=font)
+
+        if width <= max_width:
+
+            current = test
+
+        else:
+
+            if current:
+                lines.append(current)
+
+            current = word
+
+    if current:
+        lines.append(current)
+
+    return lines
+    # ==========================================
+# Draw Summary
+# ==========================================
+
+def draw_summary(canvas, summary):
+
+    draw = ImageDraw.Draw(canvas)
+
+    font = get_font(32)
+
+    lines = wrap_text(
+
+        draw,
+
+        summary,
+
+        font,
+
+        900
+
+    )
+
+    y = 1320
+
+    for line in lines[:9]:
+
+        draw.text(
+
+            (80, y),
+
+            line,
+
+            font=font,
+
+            fill=(235,235,235)
+
+        )
+
+        y += 46
+
+    return canvas
+    # ==========================================
+# Footer
+# ==========================================
+
+def draw_footer(canvas):
+
+    draw = ImageDraw.Draw(canvas)
+
+    font = get_font(26)
+
+    draw.text(
+
+        (80,1830),
+
+        "Follow for more world news",
+
+        font=font,
+
+        fill=(200,200,200)
+
+    )
+
+    return canvas
+    # ==========================================
+# Create Frame
+# ==========================================
+
+def create_frame(
+
+    image_path,
+
+    title,
+
+    summary,
+
+    progress
+
+):
+
+    bg = create_background(image_path)
+
+    bg = draw_news_image(
+
+        bg,
+
+        image_path,
+
+        progress
+
+    )
+
+    draw = ImageDraw.Draw(bg)
+
+    draw_header(draw)
+
+    draw_breaking(draw)
+
+    bg = draw_panel(bg)
+
+    bg = draw_title(bg,title)
+
+    bg = draw_summary(bg,summary)
+
+    bg = draw_footer(bg)
+
+    return bg
