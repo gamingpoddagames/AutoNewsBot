@@ -1,22 +1,19 @@
 import os
 import requests
 
-# ==========================================
-# Telegram Settings
-# ==========================================
 
 BOT_TOKEN = os.getenv("TG_TOKEN")
 CHAT_ID = os.getenv("TG_CHAT_ID")
+
+
 # ==========================================
-# Upload Video
+# Upload Video To Telegram
 # ==========================================
 
 def upload_video(video_path, caption=""):
 
     if not BOT_TOKEN or not CHAT_ID:
-
-        print("Telegram Token Missing")
-
+        print("Telegram settings missing")
         return False
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo"
@@ -26,62 +23,55 @@ def upload_video(video_path, caption=""):
         with open(video_path, "rb") as video:
 
             files = {
-
                 "video": video
-
             }
 
             data = {
-
                 "chat_id": CHAT_ID,
-
                 "caption": caption,
-
-                "supports_streaming": True,
-
-                "parse_mode": "HTML"
-
+                "supports_streaming": True
             }
 
-            r = requests.post(
-
+            response = requests.post(
                 url,
-
                 data=data,
-
                 files=files,
-
                 timeout=600
-
             )
 
-        print(r.text)
+        print(response.text)
 
-        return r.status_code == 200
+        if response.status_code == 200:
+            return True
+
+        return False
+
 
     except Exception as e:
 
-        print(e)
-      # ==========================================
-# Build Caption
+        print("Telegram Error:", e)
+
+        return False
+
+
+
+# ==========================================
+# Create Caption
 # ==========================================
 
 def make_caption(news):
 
-    caption = f"""
-
-<b>{news['title_si']}</b>
+    return f"""
+{news['title_si']}
 
 {news['summary_si']}
 
-🌍 World News in Sinhala
-
-📢 Follow for more daily news.
-
+🌍 Global Pulse 24/7
 """
 
-    return caption
-  # ==========================================
+
+
+# ==========================================
 # Upload News
 # ==========================================
 
@@ -90,34 +80,26 @@ def upload_news(video_path, news):
     caption = make_caption(news)
 
     return upload_video(
-
         video_path,
-
         caption
-
     )
-  # ==========================================
+
+
+
+# ==========================================
 # Test
 # ==========================================
 
 if __name__ == "__main__":
 
-    test_news = {
-
-        "title_si":"පරීක්ෂණ පුවත",
-
-        "summary_si":"මෙය Telegram Upload Test එකකි."
-
+    test = {
+        "title_si": "Test News",
+        "summary_si": "Telegram upload test"
     }
 
-    ok = upload_news(
-
-        "output/video.mp4",
-
-        test_news
-
+    print(
+        upload_news(
+            "output/news.mp4",
+            test
+        )
     )
-
-    print(ok)
-
-        return False
