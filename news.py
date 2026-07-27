@@ -92,3 +92,97 @@ def get_article_image(article_url):
         log(e)
 
     return None
+    # ==========================================
+# Get News From RSS
+# ==========================================
+
+def collect_news():
+
+    used = load_used(USED_FILE)
+
+    news_list = []
+
+    feeds = RSS_FEEDS.copy()
+
+    random.shuffle(feeds)
+
+    for feed_url in feeds:
+
+        try:
+
+            log(f"Checking : {feed_url}")
+
+            feed = feedparser.parse(feed_url)
+
+            source = feed.feed.get("title", "Unknown")
+
+            for entry in feed.entries[:10]:
+
+                title = clean_text(
+                    entry.get("title", "")
+                )
+
+                summary = clean_text(
+                    entry.get("summary", "")
+                )
+
+                link = entry.get("link", "")
+
+                if not title or not link:
+                    continue
+
+                news_id = news_hash(link)
+
+                if news_id in used:
+                    continue
+
+                image = get_feed_image(entry)
+
+                news_list.append({
+
+                    "id": news_id,
+
+                    "title": title,
+
+                    "summary": summary,
+
+                    "link": link,
+
+                    "image": image,
+
+                    "source": source
+
+                })
+
+        except Exception as e:
+
+            log(e)
+
+    return news_list
+
+
+# ==========================================
+# Translate News
+# ==========================================
+
+def translate_news(news):
+
+    title_si = translate(
+        news["title"]
+    )
+
+    summary_si = translate(
+        news["summary"]
+    )
+
+    if not title_si:
+        return None
+
+    if not summary_si:
+        summary_si = title_si
+
+    news["title_si"] = shorten(title_si,180)
+
+    news["summary_si"] = shorten(summary_si,650)
+
+    return news
