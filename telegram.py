@@ -66,7 +66,7 @@ def make_caption(news):
 
 {news['summary_si']}
 
-🌍 Global Pulse 24/7
+🌍 world news in sinhala
 """
 
 
