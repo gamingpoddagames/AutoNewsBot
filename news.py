@@ -186,3 +186,115 @@ def translate_news(news):
     news["summary_si"] = shorten(summary_si,650)
 
     return news
+    # ==========================================
+# Select Best News
+# ==========================================
+
+def get_best_news():
+
+    news_list = collect_news()
+
+    if not news_list:
+
+        log("No news found.")
+
+        return None
+
+    random.shuffle(news_list)
+
+    # Prefer articles with images
+    with_image = [
+        n for n in news_list
+        if n["image"]
+    ]
+
+    if with_image:
+        news = random.choice(with_image)
+    else:
+        news = random.choice(news_list)
+
+    # Try getting better image from article page
+    article_image = get_article_image(
+        news["link"]
+    )
+
+    if article_image:
+        news["image"] = article_image
+
+    # Translate
+    news = translate_news(news)
+
+    if not news:
+
+        log("Translation failed.")
+
+        return None
+
+    # Save used news
+    used = load_used(USED_FILE)
+
+    used.append(news["id"])
+
+    save_used(USED_FILE, used)
+
+    log("News Selected")
+
+    log(news["title"])
+
+    return news
+
+
+# ==========================================
+# Create Voice Script
+# ==========================================
+
+def make_script(news):
+
+    title = shorten(
+        news["title_si"],
+        180
+    )
+
+    summary = shorten(
+        news["summary_si"],
+        700
+    )
+
+    script = (
+        f"{title}. "
+        f"{summary}. "
+        "තවත් ලෝක පුවත් සඳහා අපගේ චැනලය Follow කරන්න."
+    )
+
+    return script
+
+
+# ==========================================
+# Test
+# ==========================================
+
+if __name__ == "__main__":
+
+    news = get_best_news()
+
+    if news:
+
+        print("=" * 60)
+
+        print(news["title"])
+
+        print()
+
+        print(news["title_si"])
+
+        print()
+
+        print(news["summary_si"])
+
+        print()
+
+        print(news["image"])
+
+        print()
+
+        print(make_script(news))
