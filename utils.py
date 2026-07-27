@@ -127,7 +127,7 @@ def save_used(file, data):
     with open(file, "w", encoding="utf8") as f:
 
         json.dump(
-            data[-1000:],
+            list(data)[-1000:],
             f,
             indent=4,
             ensure_ascii=False
