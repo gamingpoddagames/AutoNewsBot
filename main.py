@@ -26,10 +26,16 @@ from facebook import (
     upload_news as facebook_upload
 )
 
+from tiktok import (
+    upload_news as tiktok_upload
+)
+
 from config import (
     OUTPUT_DIR,
     ASSET_DIR
 )
+
+
 # ==========================================
 # Create Folders
 # ==========================================
@@ -43,6 +49,11 @@ os.makedirs(
     ASSET_DIR,
     exist_ok=True
 )
+
+
+# ==========================================
+# File Paths
+# ==========================================
 
 IMAGE_FILE = os.path.join(
     ASSET_DIR,
@@ -58,121 +69,244 @@ VIDEO_FILE = os.path.join(
     OUTPUT_DIR,
     "news.mp4"
 )
+
+
 # ==========================================
 # Get News
 # ==========================================
 
-print("Getting News...")
+print("=" * 50)
+print("STARTING NEWS BOT")
+print("=" * 50)
+
+print("\nGetting News...")
 
 news = get_best_news()
 
 if news is None:
-
     print("No News Found")
-
     quit()
 
-print(news["title_si"])
+print("\nNews Found:")
+print(news.get("title_si", "No Sinhala title"))
 
-print("Downloading Image...")
 
-ok = download_image(
+# ==========================================
+# Download Image
+# ==========================================
 
-    news["image"],
+print("\nDownloading Image...")
 
-    IMAGE_FILE
+image_url = news.get("image")
 
-)
+if image_url:
+
+    ok = download_image(
+        image_url,
+        IMAGE_FILE
+    )
+
+else:
+
+    ok = False
+
+
+# ==========================================
+# Fallback Image
+# ==========================================
 
 if not ok:
 
-    print("Using fallback image")
+    print("Image download failed.")
+    print("Using fallback image...")
 
     create_fallback(
-
         IMAGE_FILE
-
     )
-  # ==========================================
-# Create Voice
+
+
+# ==========================================
+# Create Sinhala Voice
 # ==========================================
 
-print("Creating Voice...")
+print("\nCreating Voice...")
 
-script = make_script(news)
-
-voice = create_voice(
-
-    script,
-
-    VOICE_FILE
-
+script = make_script(
+    news
 )
 
-if not voice:
+if not script:
+
+    print("Script creation failed.")
+    quit()
+
+
+voice_ok = create_voice(
+    script,
+    VOICE_FILE
+)
+
+if not voice_ok:
 
     print("Voice Failed")
+    quit()
+
+print("Voice Created Successfully")
+
+
+# ==========================================
+# Create Video
+# ==========================================
+
+print("\nCreating Video...")
+
+video_ok = create_video(
+    IMAGE_FILE,
+    VOICE_FILE,
+    news.get("title_si", ""),
+    news.get("summary_si", ""),
+    VIDEO_FILE
+)
+
+if not video_ok:
+
+    # Some existing video.py versions don't return True/False.
+    # Therefore check whether the MP4 was actually created.
+    if not os.path.exists(VIDEO_FILE):
+
+        print("Video Creation Failed")
+        quit()
+
+else:
+
+    print("Video Created Successfully")
+
+
+# ==========================================
+# Verify Video
+# ==========================================
+
+if not os.path.exists(VIDEO_FILE):
+
+    print("ERROR: Video file does not exist.")
 
     quit()
 
-print("Creating Video...")
 
-create_video(
-
-    IMAGE_FILE,
-
-    VOICE_FILE,
-
-    news["title_si"],
-
-    news["summary_si"],
-
+video_size = os.path.getsize(
     VIDEO_FILE
 )
+
+if video_size <= 0:
+
+    print("ERROR: Video file is empty.")
+
+    quit()
+
+
+print(
+    f"Video Ready: {VIDEO_FILE}"
+)
+
+print(
+    f"Video Size: {video_size / (1024 * 1024):.2f} MB"
+)
+
+
 # ==========================================
 # Telegram Upload
 # ==========================================
 
+print("\n" + "=" * 50)
 print("Uploading Telegram...")
+print("=" * 50)
 
-telegram_ok = telegram_upload(
+try:
 
-    VIDEO_FILE,
+    telegram_ok = telegram_upload(
+        VIDEO_FILE,
+        news
+    )
 
-    news
+    if telegram_ok:
 
-)
+        print("Telegram Success")
 
-if telegram_ok:
+    else:
 
-    print("Telegram Success")
+        print("Telegram Failed")
 
-else:
+except Exception as e:
 
-    print("Telegram Failed")
+    print(
+        f"Telegram Error: {e}"
+    )
 
 
 # ==========================================
 # Facebook Upload
 # ==========================================
 
+print("\n" + "=" * 50)
 print("Uploading Facebook...")
+print("=" * 50)
 
-facebook_ok = facebook_upload(
+try:
 
-    VIDEO_FILE,
+    facebook_ok = facebook_upload(
+        VIDEO_FILE,
+        news
+    )
 
-    news
+    if facebook_ok:
 
-)
+        print("Facebook Success")
 
-if facebook_ok:
+    else:
 
-    print("Facebook Success")
+        print("Facebook Failed")
 
-else:
+except Exception as e:
 
-    print("Facebook Failed")
+    print(
+        f"Facebook Error: {e}"
+    )
 
 
-print("Finished")
+# ==========================================
+# TikTok Upload
+# ==========================================
+
+print("\n" + "=" * 50)
+print("Uploading TikTok...")
+print("=" * 50)
+
+try:
+
+    tiktok_ok = tiktok_upload(
+        VIDEO_FILE,
+        news
+    )
+
+    if tiktok_ok:
+
+        print("TikTok Success")
+
+    else:
+
+        print("TikTok Failed")
+
+except Exception as e:
+
+    print(
+        f"TikTok Error: {e}"
+    )
+
+
+# ==========================================
+# Finished
+# ==========================================
+
+print("\n" + "=" * 50)
+print("NEWS BOT FINISHED")
+print("=" * 50)
