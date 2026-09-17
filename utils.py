@@ -4,92 +4,72 @@ import json
 import time
 import hashlib
 import requests
-
 from bs4 import BeautifulSoup
 
 
 # ============================================================
-# TRANSLATION CONFIGURATION
+# CONFIGURATION
 # ============================================================
 
-# Set this in GitHub Actions Secrets/Variables if you use
-# your own LibreTranslate-compatible server.
-#
-# Example:
-# TRANSLATE_API_URL=https://your-server.example/translate
-#
-# The program also accepts the common LibreTranslate format.
-TRANSLATE_API_URL = os.environ.get(
-    "TRANSLATE_API_URL",
-    ""
-).strip()
+MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 
-TRANSLATE_API_KEY = os.environ.get(
-    "TRANSLATE_API_KEY",
-    ""
-).strip()
+# Optional email.
+# Leave empty if you do not want to provide one.
+MYMEMORY_EMAIL = os.environ.get("MYMEMORY_EMAIL", "").strip()
 
-TRANSLATE_SOURCE = "en"
-TRANSLATE_TARGET = "si"
-
-TRANSLATE_TIMEOUT = 30
-TRANSLATE_RETRIES = 2
-
-# Small delay so that if your translation endpoint has limits,
-# we do not hammer it.
-TRANSLATE_DELAY = 1.0
-
-_last_translation_time = 0.0
-
-
-# ============================================================
-# FILES
-# ============================================================
-
-TRANSLATION_CACHE_FILE = os.path.join(
-    "data",
-    "translation_cache.json"
+# Local translation cache
+TRANSLATION_CACHE_FILE = os.environ.get(
+    "TRANSLATION_CACHE_FILE",
+    "data/translation_cache.json"
 )
 
+# MyMemory allows max 500 bytes per request.
+# Keep safely below that limit.
+TRANSLATION_MAX_CHARS = 350
+
+# Wait between translation requests.
+# This prevents rapid-fire requests.
+TRANSLATION_DELAY = 2.0
+
+HEADERS = {
+    "User-Agent": (
+        "AutoNewsBot/1.0 "
+        "(https://github.com/gamingpoddagames/AutoNewsBot)"
+    )
+}
+
 
 # ============================================================
-# CLEAN TEXT
+# LOGGING
+# ============================================================
+
+def log(text):
+    print("[AutoNewsBot]", text)
+
+
+# ============================================================
+# TEXT CLEANING
 # ============================================================
 
 def clean_text(text):
-
     if not text:
         return ""
 
-    text = BeautifulSoup(
-        str(text),
-        "html.parser"
-    ).get_text(" ")
+    text = BeautifulSoup(str(text), "html.parser").get_text(" ")
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    # Remove excessive whitespace
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
-# ============================================================
-# SHORTEN TEXT
-# ============================================================
-
 def shorten(text, limit):
-
     text = clean_text(text)
 
     if len(text) <= limit:
         return text
 
-    shortened = text[:limit].rsplit(
-        " ",
-        1
-    )[0]
+    shortened = text[:limit].rsplit(" ", 1)[0]
 
     return shortened + "..."
 
@@ -99,303 +79,225 @@ def shorten(text, limit):
 # ============================================================
 
 def has_sinhala(text):
-
     if not text:
         return False
 
-    return bool(
-        re.search(
-            r"[\u0D80-\u0DFF]",
-            text
-        )
-    )
+    return bool(re.search(r"[\u0D80-\u0DFF]", text))
 
 
 # ============================================================
 # TRANSLATION CACHE
 # ============================================================
 
-def translation_cache_key(text):
-
-    raw = (
-        TRANSLATE_SOURCE
-        + "|"
-        + TRANSLATE_TARGET
-        + "|"
-        + text
-    )
-
-    return hashlib.sha256(
-        raw.encode("utf-8")
-    ).hexdigest()
-
-
 def load_translation_cache():
+    if not os.path.exists(TRANSLATION_CACHE_FILE):
+        return {}
 
     try:
-
-        folder = os.path.dirname(
-            TRANSLATION_CACHE_FILE
-        )
-
-        if folder:
-            os.makedirs(
-                folder,
-                exist_ok=True
-            )
-
-        if not os.path.exists(
-            TRANSLATION_CACHE_FILE
-        ):
-            return {}
-
         with open(
             TRANSLATION_CACHE_FILE,
             "r",
             encoding="utf-8"
-        ) as file:
-
-            data = json.load(file)
+        ) as f:
+            data = json.load(f)
 
         if isinstance(data, dict):
             return data
 
     except Exception as e:
-
-        print(
-            "Translation cache read error:",
-            e
-        )
+        log(f"Translation cache error: {e}")
 
     return {}
 
 
 def save_translation_cache(cache):
-
     try:
+        directory = os.path.dirname(TRANSLATION_CACHE_FILE)
 
-        folder = os.path.dirname(
-            TRANSLATION_CACHE_FILE
-        )
-
-        if folder:
-            os.makedirs(
-                folder,
-                exist_ok=True
-            )
+        if directory:
+            os.makedirs(directory, exist_ok=True)
 
         with open(
             TRANSLATION_CACHE_FILE,
             "w",
             encoding="utf-8"
-        ) as file:
-
+        ) as f:
             json.dump(
                 cache,
-                file,
-                indent=2,
-                ensure_ascii=False
+                f,
+                ensure_ascii=False,
+                indent=2
             )
 
     except Exception as e:
-
-        print(
-            "Translation cache save error:",
-            e
-        )
+        log(f"Could not save translation cache: {e}")
 
 
-# ============================================================
-# RATE CONTROL
-# ============================================================
-
-def wait_for_translation_slot():
-
-    global _last_translation_time
-
-    now = time.time()
-
-    elapsed = (
-        now -
-        _last_translation_time
-    )
-
-    if elapsed < TRANSLATE_DELAY:
-
-        time.sleep(
-            TRANSLATE_DELAY - elapsed
-        )
-
-    _last_translation_time = time.time()
+def translation_cache_key(text):
+    return hashlib.sha256(
+        text.encode("utf-8")
+    ).hexdigest()
 
 
 # ============================================================
-# LIBRETRANSLATE REQUEST
+# MYMEMORY TRANSLATION
 # ============================================================
 
-def libretranslate_request(text):
-
-    if not TRANSLATE_API_URL:
-
-        print(
-            "Translation API is not configured."
-        )
-
-        print(
-            "Set TRANSLATE_API_URL "
-            "in GitHub Actions."
-        )
-
-        return ""
-
-    payload = {
-        "q": text,
-        "source": TRANSLATE_SOURCE,
-        "target": TRANSLATE_TARGET,
-        "format": "text",
-    }
-
-    if TRANSLATE_API_KEY:
-        payload["api_key"] = TRANSLATE_API_KEY
-
-    headers = {
-        "User-Agent": (
-            "AutoNewsBot/1.0"
-        ),
-        "Accept": "application/json",
-        "Content-Type": (
-            "application/json"
-        ),
-    }
-
-    for attempt in range(
-        TRANSLATE_RETRIES + 1
-    ):
-
-        try:
-
-            wait_for_translation_slot()
-
-            response = requests.post(
-                TRANSLATE_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=TRANSLATE_TIMEOUT,
-            )
-
-            if response.status_code == 200:
-
-                data = response.json()
-
-                translated = data.get(
-                    "translatedText",
-                    ""
-                )
-
-                translated = clean_text(
-                    translated
-                )
-
-                if has_sinhala(
-                    translated
-                ):
-                    return translated
-
-                print(
-                    "Translation endpoint "
-                    "returned invalid Sinhala text."
-                )
-
-                return ""
-
-            print(
-                "Translation API HTTP "
-                f"{response.status_code}: "
-                f"{response.text[:300]}"
-            )
-
-        except Exception as e:
-
-            print(
-                "Translation request error "
-                f"(attempt {attempt + 1}):",
-                e
-            )
-
-        if attempt < TRANSLATE_RETRIES:
-
-            time.sleep(
-                3 * (attempt + 1)
-            )
-
-    return ""
-
-
-# ============================================================
-# TRANSLATE ONE TEXT
-# ============================================================
-
-def translate(text):
-
-    text = shorten(
-        text,
-        1200
-    )
+def mymemory_translate(text):
+    text = clean_text(text)
 
     if not text:
         return ""
 
+    # Check cache first
     cache = load_translation_cache()
 
-    key = translation_cache_key(
-        text
-    )
+    cache_key = translation_cache_key(text)
 
-    cached = cache.get(key)
+    if cache_key in cache:
+        cached = cache[cache_key]
 
-    if cached and has_sinhala(
-        cached
-    ):
+        if has_sinhala(cached):
+            log("Translation loaded from cache.")
+            return cached
 
-        print(
-            "Translation cache hit."
-        )
+    # MyMemory has a 500-byte request limit.
+    # We use a smaller limit for safety.
+    text = shorten(text, TRANSLATION_MAX_CHARS)
 
-        return cached
+    params = {
+        "q": text,
+        "langpair": "en|si",
+        "mt": "1",
+    }
 
-    result = libretranslate_request(
-        text
-    )
+    if MYMEMORY_EMAIL:
+        params["de"] = MYMEMORY_EMAIL
 
-    if result:
+    for attempt in range(1, 4):
 
-        cache[key] = result
+        try:
 
-        save_translation_cache(
-            cache
-        )
+            log(
+                f"MyMemory translation "
+                f"attempt {attempt}/3..."
+            )
 
-        return result
+            response = requests.get(
+                MYMEMORY_URL,
+                params=params,
+                headers=HEADERS,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                log(
+                    f"MyMemory HTTP error: "
+                    f"{response.status_code}"
+                )
+
+                time.sleep(3)
+                continue
+
+            data = response.json()
+
+            response_data = data.get(
+                "responseData",
+                {}
+            )
+
+            translated = response_data.get(
+                "translatedText",
+                ""
+            )
+
+            translated = clean_text(translated)
+
+            if not translated:
+                log("MyMemory returned empty translation.")
+                time.sleep(3)
+                continue
+
+            # Make sure the result is actually Sinhala.
+            if not has_sinhala(translated):
+
+                log(
+                    "MyMemory returned text without "
+                    "Sinhala characters."
+                )
+
+                time.sleep(3)
+                continue
+
+            # Save to cache
+            cache[cache_key] = translated
+
+            # Keep cache reasonably sized.
+            if len(cache) > 2000:
+                items = list(cache.items())[-1500:]
+                cache = dict(items)
+
+            save_translation_cache(cache)
+
+            log("Translation successful.")
+
+            return translated
+
+        except requests.RequestException as e:
+
+            log(
+                f"MyMemory request error: {e}"
+            )
+
+            time.sleep(3)
+
+        except Exception as e:
+
+            log(
+                f"MyMemory translation error: {e}"
+            )
+
+            time.sleep(3)
 
     return ""
 
 
 # ============================================================
-# TRANSLATE BATCH
+# PUBLIC TRANSLATION FUNCTION
+# ============================================================
+
+def translate(text):
+    text = clean_text(text)
+
+    if not text:
+        return ""
+
+    return mymemory_translate(text)
+
+
+# ============================================================
+# TRANSLATE MULTIPLE TEXTS
 # ============================================================
 
 def translate_batch(texts):
 
-    if not texts:
-        return []
-
     results = []
 
-    for text in texts:
+    for index, text in enumerate(texts):
 
-        results.append(
-            translate(text)
-        )
+        text = clean_text(text)
+
+        if not text:
+            results.append("")
+            continue
+
+        result = translate(text)
+
+        results.append(result)
+
+        # Don't wait after the final request.
+        if index < len(texts) - 1:
+            time.sleep(TRANSLATION_DELAY)
 
     return results
 
@@ -404,75 +306,41 @@ def translate_batch(texts):
 # DOWNLOAD
 # ============================================================
 
-def download(
-    url,
-    path,
-    retry=3
-):
+def download(url, path, retry=3):
 
     if not url:
         return False
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/128.0 Safari/537.36"
-        )
-    }
-
-    for attempt in range(retry):
+    for attempt in range(1, retry + 1):
 
         try:
 
             response = requests.get(
                 url,
                 timeout=30,
-                headers=headers
+                headers=HEADERS
             )
 
-            if (
-                response.status_code == 200
-                and response.content
-            ):
+            if response.status_code == 200:
 
-                folder = os.path.dirname(
-                    path
-                )
-
-                if folder:
-                    os.makedirs(
-                        folder,
-                        exist_ok=True
-                    )
-
-                with open(
-                    path,
-                    "wb"
-                ) as file:
-
-                    file.write(
-                        response.content
-                    )
+                with open(path, "wb") as f:
+                    f.write(response.content)
 
                 return True
 
+            log(
+                f"Download HTTP error "
+                f"{response.status_code}"
+            )
+
         except Exception as e:
 
-            print(
-                "Download error "
-                f"(attempt {attempt + 1}/"
-                f"{retry}):",
-                e
+            log(
+                f"Download error "
+                f"{attempt}/{retry}: {e}"
             )
 
-        if attempt < retry - 1:
-
-            time.sleep(
-                2 * (attempt + 1)
-            )
+        time.sleep(2)
 
     return False
 
@@ -483,56 +351,45 @@ def download(
 
 def load_used(file):
 
-    try:
+    if os.path.exists(file):
 
-        if os.path.exists(file):
+        try:
 
             with open(
                 file,
                 "r",
-                encoding="utf-8"
+                encoding="utf8"
             ) as f:
 
                 data = json.load(f)
 
-            if isinstance(
-                data,
-                list
-            ):
+                if isinstance(data, list):
+                    return data
 
-                return data
+        except Exception:
 
-    except Exception as e:
-
-        print(
-            "used.json damaged. "
-            "Resetting:",
-            e
-        )
+            print(
+                "used.json damaged. "
+                "Resetting..."
+            )
 
     return []
 
 
-def save_used(
-    file,
-    data
-):
+def save_used(file, data):
 
-    folder = os.path.dirname(
-        file
-    )
+    directory = os.path.dirname(file)
 
-    if folder:
-
+    if directory:
         os.makedirs(
-            folder,
+            directory,
             exist_ok=True
         )
 
     with open(
         file,
         "w",
-        encoding="utf-8"
+        encoding="utf8"
     ) as f:
 
         json.dump(
@@ -550,17 +407,5 @@ def save_used(
 def news_hash(link):
 
     return hashlib.md5(
-        link.encode("utf-8")
+        link.encode("utf8")
     ).hexdigest()
-
-
-# ============================================================
-# LOGGER
-# ============================================================
-
-def log(text):
-
-    print(
-        "[AutoNewsBot]",
-        text
-    )
