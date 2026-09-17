@@ -1,18 +1,21 @@
 import random
 import feedparser
 import requests
+
 from bs4 import BeautifulSoup
 
 from config import RSS_FEEDS, USED_FILE
+
 from utils import (
     clean_text,
-    translate,
+    translate_batch,
     shorten,
     load_used,
     save_used,
     news_hash,
     log,
 )
+
 
 HEADERS = {
     "User-Agent": (
@@ -22,55 +25,104 @@ HEADERS = {
     )
 }
 
-MAX_CANDIDATES = 8
 
+MAX_CANDIDATES = 5
+
+
+# ============================================================
+# IMAGE URL
+# ============================================================
 
 def upgrade_image_url(url):
+
     if not url:
         return None
 
-    replacements = ["240", "320", "480", "624", "800"]
+    replacements = [
+        "240",
+        "320",
+        "480",
+        "624",
+        "800",
+    ]
 
     for size in replacements:
-        url = url.replace(f"/{size}/", "/1024/")
+
+        url = url.replace(
+            f"/{size}/",
+            "/1024/"
+        )
 
     return url
 
 
+# ============================================================
+# RSS IMAGE
+# ============================================================
+
 def get_feed_image(entry):
+
     try:
+
         if "media_content" in entry:
+
             for media in entry.media_content:
+
                 if media.get("url"):
-                    return upgrade_image_url(media["url"])
+
+                    return upgrade_image_url(
+                        media["url"]
+                    )
 
         if "media_thumbnail" in entry:
+
             for media in entry.media_thumbnail:
+
                 if media.get("url"):
-                    return upgrade_image_url(media["url"])
+
+                    return upgrade_image_url(
+                        media["url"]
+                    )
 
         if "links" in entry:
+
             for link in entry.links:
-                if "image" in link.get("type", ""):
+
+                link_type = link.get(
+                    "type",
+                    ""
+                )
+
+                if "image" in link_type:
+
                     return upgrade_image_url(
                         link.get("href")
                     )
 
     except Exception as e:
-        log(f"Feed image error: {e}")
+
+        log(
+            f"Feed image error: {e}"
+        )
 
     return None
 
 
+# ============================================================
+# ARTICLE IMAGE
+# ============================================================
+
 def get_article_image(article_url):
+
     if not article_url:
         return None
 
     try:
+
         response = requests.get(
             article_url,
             headers=HEADERS,
-            timeout=15,
+            timeout=15
         )
 
         response.raise_for_status()
@@ -81,40 +133,81 @@ def get_article_image(article_url):
         )
 
         tags = [
-            ("meta", {"property": "og:image"}),
-            ("meta", {"name": "twitter:image"}),
-            ("meta", {"property": "twitter:image"}),
+            (
+                "meta",
+                {"property": "og:image"}
+            ),
+            (
+                "meta",
+                {"name": "twitter:image"}
+            ),
+            (
+                "meta",
+                {"property": "twitter:image"}
+            ),
         ]
 
         for tag, attr in tags:
-            item = soup.find(tag, attr)
 
-            if item and item.get("content"):
-                image = upgrade_image_url(
-                    item.get("content")
+            item = soup.find(
+                tag,
+                attr
+            )
+
+            if (
+                item
+                and item.get("content")
+            ):
+
+                image = (
+                    upgrade_image_url(
+                        item.get("content")
+                    )
                 )
 
                 if image:
                     return image
 
     except Exception as e:
-        log(f"Article image error: {e}")
+
+        log(
+            f"Article image error: {e}"
+        )
 
     return None
 
 
+# ============================================================
+# COLLECT NEWS
+# ============================================================
+
 def collect_news():
-    used = load_used(USED_FILE)
+
+    used = load_used(
+        USED_FILE
+    )
+
     news_list = []
 
-    feeds = list(RSS_FEEDS)
-    random.shuffle(feeds)
+    feeds = list(
+        RSS_FEEDS
+    )
+
+    random.shuffle(
+        feeds
+    )
 
     for feed_url in feeds:
-        try:
-            log(f"Checking : {feed_url}")
 
-            feed = feedparser.parse(feed_url)
+        try:
+
+            log(
+                f"Checking : {feed_url}"
+            )
+
+            feed = feedparser.parse(
+                feed_url
+            )
 
             source = feed.feed.get(
                 "title",
@@ -124,11 +217,17 @@ def collect_news():
             for entry in feed.entries[:10]:
 
                 title = clean_text(
-                    entry.get("title", "")
+                    entry.get(
+                        "title",
+                        ""
+                    )
                 )
 
                 summary = clean_text(
-                    entry.get("summary", "")
+                    entry.get(
+                        "summary",
+                        ""
+                    )
                 )
 
                 link = entry.get(
@@ -139,45 +238,85 @@ def collect_news():
                 if not title or not link:
                     continue
 
-                news_id = news_hash(link)
+                news_id = news_hash(
+                    link
+                )
 
                 if news_id in used:
                     continue
 
-                image = get_feed_image(entry)
+                image = get_feed_image(
+                    entry
+                )
 
                 news_list.append({
+
                     "id": news_id,
+
                     "title": title,
+
                     "summary": summary,
+
                     "link": link,
+
                     "image": image,
+
                     "source": source,
+
                 })
 
         except Exception as e:
-            log(f"Feed error: {e}")
+
+            log(
+                f"Feed error: {e}"
+            )
 
     return news_list
 
 
+# ============================================================
+# TRANSLATE NEWS
+# ============================================================
+
 def translate_news(news):
-    title_si = translate(
-        news["title"]
+
+    title = shorten(
+        news.get("title", ""),
+        1200
     )
 
-    if not title_si:
-        log("Title translation failed.")
+    summary = shorten(
+        news.get("summary", ""),
+        1200
+    )
+
+    # Translate both in one controlled function.
+    translations = translate_batch(
+        [
+            title,
+            summary
+        ]
+    )
+
+    if not translations:
         return None
 
-    summary_si = translate(
-        news["summary"]
-    )
+    title_si = translations[0]
+
+    summary_si = translations[1]
+
+    if not title_si:
+
+        log(
+            "Title translation failed."
+        )
+
+        return None
 
     if not summary_si:
+
         log(
-            "Summary translation failed. "
-            "Using translated title."
+            "Summary translation failed."
         )
 
         summary_si = title_si
@@ -195,14 +334,25 @@ def translate_news(news):
     return news
 
 
+# ============================================================
+# SELECT BEST NEWS
+# ============================================================
+
 def get_best_news():
+
     news_list = collect_news()
 
     if not news_list:
-        log("No news found.")
+
+        log(
+            "No news found."
+        )
+
         return None
 
-    random.shuffle(news_list)
+    random.shuffle(
+        news_list
+    )
 
     with_image = [
         news
@@ -211,12 +361,20 @@ def get_best_news():
     ]
 
     if with_image:
-        candidates = with_image[:MAX_CANDIDATES]
+
+        candidates = with_image[
+            :MAX_CANDIDATES
+        ]
+
     else:
-        candidates = news_list[:MAX_CANDIDATES]
+
+        candidates = news_list[
+            :MAX_CANDIDATES
+        ]
 
     log(
-        f"Found {len(news_list)} unused articles."
+        f"Found {len(news_list)} "
+        "unused articles."
     )
 
     log(
@@ -227,59 +385,94 @@ def get_best_news():
     for news in candidates:
 
         try:
+
             if not news.get("image"):
-                article_image = get_article_image(
-                    news["link"]
+
+                article_image = (
+                    get_article_image(
+                        news["link"]
+                    )
                 )
 
                 if article_image:
-                    news["image"] = article_image
 
-            translated = translate_news(news)
+                    news["image"] = (
+                        article_image
+                    )
+
+            translated = (
+                translate_news(news)
+            )
 
             if not translated:
+
                 log(
-                    "Skipping article because "
-                    "translation failed."
+                    "Skipping article "
+                    "because translation "
+                    "failed."
                 )
+
                 continue
 
-            used = load_used(USED_FILE)
+            used = load_used(
+                USED_FILE
+            )
 
             if news["id"] not in used:
-                used.append(news["id"])
+
+                used.append(
+                    news["id"]
+                )
 
             save_used(
                 USED_FILE,
                 used
             )
 
-            log("News Selected")
-            log(news["title"])
+            log(
+                "News Selected"
+            )
+
+            log(
+                news["title"]
+            )
 
             return translated
 
         except Exception as e:
+
             log(
-                f"Article processing error: {e}"
+                "Article processing error: "
+                f"{e}"
             )
 
     log(
-        "All candidate articles failed "
-        "translation/processing."
+        "All candidate articles "
+        "failed."
     )
 
     return None
 
 
+# ============================================================
+# VIDEO SCRIPT
+# ============================================================
+
 def make_script(news):
+
     title = shorten(
-        news.get("title_si", ""),
+        news.get(
+            "title_si",
+            ""
+        ),
         180
     )
 
     summary = shorten(
-        news.get("summary_si", ""),
+        news.get(
+            "summary_si",
+            ""
+        ),
         700
     )
 
@@ -293,32 +486,50 @@ def make_script(news):
     return script
 
 
+# ============================================================
+# TEST
+# ============================================================
+
 if __name__ == "__main__":
 
     news = get_best_news()
 
     if news:
 
-        print("=" * 60)
+        print(
+            "=" * 60
+        )
 
-        print(news["title"])
-
-        print()
-
-        print(news["title_si"])
-
-        print()
-
-        print(news["summary_si"])
+        print(
+            news["title"]
+        )
 
         print()
 
-        print(news["image"])
+        print(
+            news["title_si"]
+        )
 
         print()
 
-        print(make_script(news))
+        print(
+            news["summary_si"]
+        )
+
+        print()
+
+        print(
+            news["image"]
+        )
+
+        print()
+
+        print(
+            make_script(news)
+        )
 
     else:
 
-        print("No News Found")
+        print(
+            "No News Found"
+        )
