@@ -1,61 +1,42 @@
-```python
 import os
 import re
 import json
 import time
 import hashlib
-
 import requests
+
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
 
-# ==========================================================
-# Translation Settings
-# ==========================================================
+# ============================================================
+# TRANSLATION SETTINGS
+# ============================================================
 
-# Minimum time between Google Translate requests.
-# This helps avoid hitting the request-rate limit.
 TRANSLATE_DELAY = 2.5
-
-# Number of attempts for temporary translation failures.
 TRANSLATE_RETRIES = 4
 
-# Cache file so identical text is not translated again.
-TRANSLATION_CACHE_FILE = "translation_cache.json"
-
-
-# ==========================================================
-# Global Translation State
-# ==========================================================
-
-_last_translate_time = 0.0
-
-_translator = GoogleTranslator(
-    source="auto",
-    target="si"
+TRANSLATION_CACHE_FILE = os.path.join(
+    "data",
+    "translation_cache.json"
 )
 
+_last_translation_time = 0.0
 
-# ==========================================================
-# Clean HTML/Text
-# ==========================================================
+
+# ============================================================
+# CLEAN HTML / TEXT
+# ============================================================
 
 def clean_text(text):
 
     if not text:
         return ""
 
-    try:
-
-        text = BeautifulSoup(
-            str(text),
-            "html.parser"
-        ).get_text(" ")
-
-    except Exception:
-
-        text = str(text)
+    text = BeautifulSoup(
+        str(text),
+        "html.parser"
+    ).get_text(" ")
 
     text = re.sub(
         r"\s+",
@@ -66,41 +47,32 @@ def clean_text(text):
     return text.strip()
 
 
-# ==========================================================
-# Limit Text
-# ==========================================================
+# ============================================================
+# LIMIT TEXT
+# ============================================================
 
 def shorten(text, limit):
 
-    text = clean_text(
-        text
-    )
+    text = clean_text(text)
 
     if len(text) <= limit:
-
         return text
 
-    shortened = text[:limit]
-
-    # Avoid cutting a word in half.
-    if " " in shortened:
-
-        shortened = shortened.rsplit(
-            " ",
-            1
-        )[0]
+    shortened = text[:limit].rsplit(
+        " ",
+        1
+    )[0]
 
     return shortened + "..."
 
 
-# ==========================================================
-# Sinhala Check
-# ==========================================================
+# ============================================================
+# SINHALA CHECK
+# ============================================================
 
 def has_sinhala(text):
 
     if not text:
-
         return False
 
     return bool(
@@ -111,36 +83,44 @@ def has_sinhala(text):
     )
 
 
-# ==========================================================
-# Translation Cache
-# ==========================================================
+# ============================================================
+# TRANSLATION CACHE
+# ============================================================
 
 def load_translation_cache():
 
-    if not os.path.exists(
-        TRANSLATION_CACHE_FILE
-    ):
-
-        return {}
-
     try:
+
+        folder = os.path.dirname(
+            TRANSLATION_CACHE_FILE
+        )
+
+        if folder:
+            os.makedirs(
+                folder,
+                exist_ok=True
+            )
+
+        if not os.path.exists(
+            TRANSLATION_CACHE_FILE
+        ):
+            return {}
 
         with open(
             TRANSLATION_CACHE_FILE,
             "r",
-            encoding="utf8"
-        ) as f:
+            encoding="utf-8"
+        ) as file:
 
-            data = json.load(f)
+            data = json.load(file)
 
-            if isinstance(data, dict):
-
-                return data
+        if isinstance(data, dict):
+            return data
 
     except Exception as e:
 
         print(
-            "Translation cache error:",
+            "Translation cache read error:",
             e
         )
 
@@ -151,27 +131,26 @@ def save_translation_cache(cache):
 
     try:
 
-        # Keep the cache from becoming enormous.
-        if len(cache) > 2000:
+        folder = os.path.dirname(
+            TRANSLATION_CACHE_FILE
+        )
 
-            items = list(
-                cache.items()
-            )[-2000:]
-
-            cache = dict(
-                items
+        if folder:
+            os.makedirs(
+                folder,
+                exist_ok=True
             )
 
         with open(
             TRANSLATION_CACHE_FILE,
             "w",
-            encoding="utf8"
-        ) as f:
+            encoding="utf-8"
+        ) as file:
 
             json.dump(
                 cache,
-                f,
-                indent=4,
+                file,
+                indent=2,
                 ensure_ascii=False
             )
 
@@ -186,130 +165,100 @@ def save_translation_cache(cache):
 def translation_cache_key(text):
 
     return hashlib.sha256(
-        text.encode(
-            "utf-8"
-        )
+        text.encode("utf-8")
     ).hexdigest()
 
 
-# ==========================================================
-# Wait Before Translation
-# ==========================================================
+# ============================================================
+# TRANSLATION RATE CONTROL
+# ============================================================
 
 def wait_for_translation_slot():
 
-    global _last_translate_time
+    global _last_translation_time
 
-    now = time.monotonic()
+    now = time.time()
 
     elapsed = (
-        now - _last_translate_time
+        now -
+        _last_translation_time
     )
 
     if elapsed < TRANSLATE_DELAY:
 
-        wait_time = (
-            TRANSLATE_DELAY
-            - elapsed
-        )
-
-        print(
-            f"Translation cooldown: "
-            f"waiting {wait_time:.1f}s"
-        )
-
         time.sleep(
-            wait_time
+            TRANSLATE_DELAY - elapsed
         )
 
+    _last_translation_time = time.time()
 
-# ==========================================================
-# Translate
-# ==========================================================
+
+def is_rate_limit_error(error):
+
+    message = str(error).lower()
+
+    keywords = [
+        "too many requests",
+        "429",
+        "rate limit",
+        "server error",
+        "quota",
+        "blocked",
+    ]
+
+    return any(
+        keyword in message
+        for keyword in keywords
+    )
+
+
+# ============================================================
+# TRANSLATE ONE TEXT
+# ============================================================
 
 def translate(text):
 
-    global _last_translate_time
-
-    text = clean_text(
-        text
-    )
-
-    # Keep requests reasonably small.
     text = shorten(
         text,
         1200
     )
 
     if not text:
-
         return ""
-
-    # ------------------------------------------------------
-    # Check cache first
-    # ------------------------------------------------------
 
     cache = load_translation_cache()
 
-    cache_key = translation_cache_key(
-        text
-    )
+    key = translation_cache_key(text)
 
-    if cache_key in cache:
+    cached = cache.get(key)
 
-        cached = cache[
-            cache_key
-        ]
+    if cached and has_sinhala(cached):
+        return cached
 
-        if cached and has_sinhala(cached):
-
-            print(
-                "Translation cache hit."
-            )
-
-            return cached
-
-    # ------------------------------------------------------
-    # Translation attempts
-    # ------------------------------------------------------
+    last_error = None
 
     for attempt in range(
-        1,
-        TRANSLATE_RETRIES + 1
+        TRANSLATE_RETRIES
     ):
 
         try:
 
-            # Respect request spacing.
             wait_for_translation_slot()
 
-            print(
-                f"Translating "
-                f"(attempt {attempt}/{TRANSLATE_RETRIES})..."
+            translator = GoogleTranslator(
+                source="auto",
+                target="si"
             )
 
-            result = _translator.translate(
+            result = translator.translate(
                 text
             )
 
-            # Record request time.
-            _last_translate_time = (
-                time.monotonic()
-            )
+            result = clean_text(result)
 
-            result = clean_text(
-                result
-            )
+            if has_sinhala(result):
 
-            # --------------------------------------------------
-            # Validate result
-            # --------------------------------------------------
-
-            if result and has_sinhala(result):
-
-                cache[
-                    cache_key
-                ] = result
+                cache[key] = result
 
                 save_translation_cache(
                     cache
@@ -317,102 +266,222 @@ def translate(text):
 
                 return result
 
-            print(
+            last_error = Exception(
                 "Translation returned "
-                "no valid Sinhala text."
+                "no Sinhala text."
             )
 
         except Exception as e:
 
-            _last_translate_time = (
-                time.monotonic()
-            )
+            last_error = e
 
-            error_text = str(
+            print(
+                "Translate Error "
+                f"(attempt {attempt + 1}/"
+                f"{TRANSLATE_RETRIES}):",
                 e
             )
 
-            print(
-                "Translate Error:",
-                error_text
-            )
+            if is_rate_limit_error(e):
 
-            # --------------------------------------------------
-            # Rate limit / temporary server error
-            # --------------------------------------------------
-
-            lower_error = (
-                error_text.lower()
-            )
-
-            rate_limited = (
-                "too many requests"
-                in lower_error
-                or "429"
-                in lower_error
-                or "rate limit"
-                in lower_error
-                or "server error"
-                in lower_error
-            )
-
-            if rate_limited:
-
-                # Increasing backoff:
-                #
-                # attempt 1 -> 5 sec
-                # attempt 2 -> 10 sec
-                # attempt 3 -> 20 sec
-                #
-                wait_time = (
-                    5 * (2 ** (attempt - 1))
-                )
-
-                print(
-                    "Google Translate "
-                    "rate limit detected."
-                )
-
-                print(
-                    f"Waiting {wait_time} seconds "
-                    "before retry..."
-                )
-
-                time.sleep(
-                    wait_time
+                wait_seconds = (
+                    8 * (attempt + 1)
                 )
 
             else:
 
-                # Other temporary errors.
-                wait_time = (
-                    2 * attempt
+                wait_seconds = (
+                    3 * (attempt + 1)
                 )
 
-                print(
-                    f"Waiting {wait_time} seconds "
-                    "before retry..."
-                )
+            if (
+                attempt
+                < TRANSLATE_RETRIES - 1
+            ):
 
                 time.sleep(
-                    wait_time
+                    wait_seconds
                 )
 
-    # ------------------------------------------------------
-    # All attempts failed
-    # ------------------------------------------------------
+    if last_error:
 
-    print(
-        "Translation failed after "
-        f"{TRANSLATE_RETRIES} attempts."
-    )
+        print(
+            "Translation failed "
+            "after retries:",
+            last_error
+        )
 
     return ""
 
 
-# ==========================================================
-# Retry Download
-# ==========================================================
+# ============================================================
+# TRANSLATE BATCH
+# ============================================================
+
+def translate_batch(texts):
+
+    if not texts:
+        return []
+
+    cleaned = [
+        shorten(text, 1200)
+        for text in texts
+    ]
+
+    cache = load_translation_cache()
+
+    results = [
+        ""
+        for _ in cleaned
+    ]
+
+    pending = []
+    pending_indexes = []
+
+    for index, text in enumerate(
+        cleaned
+    ):
+
+        if not text:
+            continue
+
+        key = translation_cache_key(
+            text
+        )
+
+        cached = cache.get(key)
+
+        if cached and has_sinhala(
+            cached
+        ):
+
+            results[index] = cached
+
+        else:
+
+            pending.append(text)
+            pending_indexes.append(index)
+
+    if not pending:
+        return results
+
+    last_error = None
+
+    for attempt in range(
+        TRANSLATE_RETRIES
+    ):
+
+        try:
+
+            wait_for_translation_slot()
+
+            translator = GoogleTranslator(
+                source="auto",
+                target="si"
+            )
+
+            translated = (
+                translator.translate_batch(
+                    pending
+                )
+            )
+
+            if not isinstance(
+                translated,
+                list
+            ):
+
+                translated = list(
+                    translated
+                )
+
+            for (
+                index,
+                original,
+                result
+            ) in zip(
+                pending_indexes,
+                pending,
+                translated
+            ):
+
+                result = clean_text(
+                    result
+                )
+
+                if has_sinhala(result):
+
+                    results[index] = result
+
+                    cache[
+                        translation_cache_key(
+                            original
+                        )
+                    ] = result
+
+            save_translation_cache(
+                cache
+            )
+
+            return results
+
+        except Exception as e:
+
+            last_error = e
+
+            print(
+                "Batch Translate Error "
+                f"(attempt {attempt + 1}/"
+                f"{TRANSLATE_RETRIES}):",
+                e
+            )
+
+            if is_rate_limit_error(e):
+
+                wait_seconds = (
+                    10 * (attempt + 1)
+                )
+
+            else:
+
+                wait_seconds = (
+                    4 * (attempt + 1)
+                )
+
+            if (
+                attempt
+                < TRANSLATE_RETRIES - 1
+            ):
+
+                time.sleep(
+                    wait_seconds
+                )
+
+    print(
+        "Batch translation failed "
+        "after retries:",
+        last_error
+    )
+
+    # Individual translation fallback.
+    for index, text in zip(
+        pending_indexes,
+        pending
+    ):
+
+        if results[index]:
+            continue
+
+        results[index] = translate(
+            text
+        )
+
+    return results
+
+
+# ============================================================
+# DOWNLOAD FILE
+# ============================================================
 
 def download(
     url,
@@ -420,37 +489,52 @@ def download(
     retry=3
 ):
 
+    if not url:
+        return False
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 "
             "(Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 "
             "(KHTML, like Gecko) "
-            "Chrome/140.0 Safari/537.36"
+            "Chrome/128.0 Safari/537.36"
         )
     }
 
-    for i in range(
-        retry
-    ):
+    for attempt in range(retry):
 
         try:
 
-            r = requests.get(
+            response = requests.get(
                 url,
                 timeout=30,
                 headers=headers
             )
 
-            if r.status_code == 200:
+            if (
+                response.status_code == 200
+                and response.content
+            ):
+
+                folder = os.path.dirname(
+                    path
+                )
+
+                if folder:
+
+                    os.makedirs(
+                        folder,
+                        exist_ok=True
+                    )
 
                 with open(
                     path,
                     "wb"
-                ) as f:
+                ) as file:
 
-                    f.write(
-                        r.content
+                    file.write(
+                        response.content
                     )
 
                 return True
@@ -458,55 +542,53 @@ def download(
         except Exception as e:
 
             print(
-                f"Download attempt "
-                f"{i + 1} failed:",
+                "Download Error "
+                f"(attempt {attempt + 1}/"
+                f"{retry}):",
                 e
             )
 
-        if i < retry - 1:
+        if attempt < retry - 1:
 
             time.sleep(
-                2
+                2 * (attempt + 1)
             )
 
     return False
 
 
-# ==========================================================
-# Used News
-# ==========================================================
+# ============================================================
+# USED NEWS
+# ============================================================
 
 def load_used(file):
 
-    if os.path.exists(
-        file
-    ):
+    try:
 
-        try:
+        if os.path.exists(file):
 
             with open(
                 file,
                 "r",
-                encoding="utf8"
+                encoding="utf-8"
             ) as f:
 
-                data = json.load(
-                    f
-                )
+                data = json.load(f)
 
-                if isinstance(
-                    data,
-                    list
-                ):
+            if isinstance(
+                data,
+                list
+            ):
 
-                    return data
+                return data
 
-        except Exception:
+    except Exception as e:
 
-            print(
-                "used.json damaged. "
-                "Resetting..."
-            )
+        print(
+            "used.json damaged. "
+            "Resetting:",
+            e
+        )
 
     return []
 
@@ -516,45 +598,45 @@ def save_used(
     data
 ):
 
-    try:
+    folder = os.path.dirname(
+        file
+    )
 
-        with open(
-            file,
-            "w",
-            encoding="utf8"
-        ) as f:
+    if folder:
 
-            json.dump(
-                list(data)[-1000:],
-                f,
-                indent=4,
-                ensure_ascii=False
-            )
+        os.makedirs(
+            folder,
+            exist_ok=True
+        )
 
-    except Exception as e:
+    with open(
+        file,
+        "w",
+        encoding="utf-8"
+    ) as f:
 
-        print(
-            "Could not save used news:",
-            e
+        json.dump(
+            list(data)[-1000:],
+            f,
+            indent=4,
+            ensure_ascii=False
         )
 
 
-# ==========================================================
-# News ID
-# ==========================================================
+# ============================================================
+# NEWS ID
+# ============================================================
 
 def news_hash(link):
 
     return hashlib.md5(
-        link.encode(
-            "utf8"
-        )
+        link.encode("utf-8")
     ).hexdigest()
 
 
-# ==========================================================
-# Logger
-# ==========================================================
+# ============================================================
+# LOGGER
+# ============================================================
 
 def log(text):
 
@@ -562,4 +644,3 @@ def log(text):
         "[AutoNewsBot]",
         text
     )
-```
