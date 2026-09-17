@@ -6,26 +6,54 @@ import hashlib
 import requests
 
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator
 
 
 # ============================================================
-# TRANSLATION SETTINGS
+# TRANSLATION CONFIGURATION
 # ============================================================
 
-TRANSLATE_DELAY = 2.5
-TRANSLATE_RETRIES = 4
+# Set this in GitHub Actions Secrets/Variables if you use
+# your own LibreTranslate-compatible server.
+#
+# Example:
+# TRANSLATE_API_URL=https://your-server.example/translate
+#
+# The program also accepts the common LibreTranslate format.
+TRANSLATE_API_URL = os.environ.get(
+    "TRANSLATE_API_URL",
+    ""
+).strip()
+
+TRANSLATE_API_KEY = os.environ.get(
+    "TRANSLATE_API_KEY",
+    ""
+).strip()
+
+TRANSLATE_SOURCE = "en"
+TRANSLATE_TARGET = "si"
+
+TRANSLATE_TIMEOUT = 30
+TRANSLATE_RETRIES = 2
+
+# Small delay so that if your translation endpoint has limits,
+# we do not hammer it.
+TRANSLATE_DELAY = 1.0
+
+_last_translation_time = 0.0
+
+
+# ============================================================
+# FILES
+# ============================================================
 
 TRANSLATION_CACHE_FILE = os.path.join(
     "data",
     "translation_cache.json"
 )
 
-_last_translation_time = 0.0
-
 
 # ============================================================
-# CLEAN HTML / TEXT
+# CLEAN TEXT
 # ============================================================
 
 def clean_text(text):
@@ -48,7 +76,7 @@ def clean_text(text):
 
 
 # ============================================================
-# LIMIT TEXT
+# SHORTEN TEXT
 # ============================================================
 
 def shorten(text, limit):
@@ -86,6 +114,21 @@ def has_sinhala(text):
 # ============================================================
 # TRANSLATION CACHE
 # ============================================================
+
+def translation_cache_key(text):
+
+    raw = (
+        TRANSLATE_SOURCE
+        + "|"
+        + TRANSLATE_TARGET
+        + "|"
+        + text
+    )
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
+
 
 def load_translation_cache():
 
@@ -162,15 +205,8 @@ def save_translation_cache(cache):
         )
 
 
-def translation_cache_key(text):
-
-    return hashlib.sha256(
-        text.encode("utf-8")
-    ).hexdigest()
-
-
 # ============================================================
-# TRANSLATION RATE CONTROL
+# RATE CONTROL
 # ============================================================
 
 def wait_for_translation_slot():
@@ -193,23 +229,106 @@ def wait_for_translation_slot():
     _last_translation_time = time.time()
 
 
-def is_rate_limit_error(error):
+# ============================================================
+# LIBRETRANSLATE REQUEST
+# ============================================================
 
-    message = str(error).lower()
+def libretranslate_request(text):
 
-    keywords = [
-        "too many requests",
-        "429",
-        "rate limit",
-        "server error",
-        "quota",
-        "blocked",
-    ]
+    if not TRANSLATE_API_URL:
 
-    return any(
-        keyword in message
-        for keyword in keywords
-    )
+        print(
+            "Translation API is not configured."
+        )
+
+        print(
+            "Set TRANSLATE_API_URL "
+            "in GitHub Actions."
+        )
+
+        return ""
+
+    payload = {
+        "q": text,
+        "source": TRANSLATE_SOURCE,
+        "target": TRANSLATE_TARGET,
+        "format": "text",
+    }
+
+    if TRANSLATE_API_KEY:
+        payload["api_key"] = TRANSLATE_API_KEY
+
+    headers = {
+        "User-Agent": (
+            "AutoNewsBot/1.0"
+        ),
+        "Accept": "application/json",
+        "Content-Type": (
+            "application/json"
+        ),
+    }
+
+    for attempt in range(
+        TRANSLATE_RETRIES + 1
+    ):
+
+        try:
+
+            wait_for_translation_slot()
+
+            response = requests.post(
+                TRANSLATE_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=TRANSLATE_TIMEOUT,
+            )
+
+            if response.status_code == 200:
+
+                data = response.json()
+
+                translated = data.get(
+                    "translatedText",
+                    ""
+                )
+
+                translated = clean_text(
+                    translated
+                )
+
+                if has_sinhala(
+                    translated
+                ):
+                    return translated
+
+                print(
+                    "Translation endpoint "
+                    "returned invalid Sinhala text."
+                )
+
+                return ""
+
+            print(
+                "Translation API HTTP "
+                f"{response.status_code}: "
+                f"{response.text[:300]}"
+            )
+
+        except Exception as e:
+
+            print(
+                "Translation request error "
+                f"(attempt {attempt + 1}):",
+                e
+            )
+
+        if attempt < TRANSLATE_RETRIES:
+
+            time.sleep(
+                3 * (attempt + 1)
+            )
+
+    return ""
 
 
 # ============================================================
@@ -228,88 +347,35 @@ def translate(text):
 
     cache = load_translation_cache()
 
-    key = translation_cache_key(text)
+    key = translation_cache_key(
+        text
+    )
 
     cached = cache.get(key)
 
-    if cached and has_sinhala(cached):
-        return cached
-
-    last_error = None
-
-    for attempt in range(
-        TRANSLATE_RETRIES
+    if cached and has_sinhala(
+        cached
     ):
 
-        try:
-
-            wait_for_translation_slot()
-
-            translator = GoogleTranslator(
-                source="auto",
-                target="si"
-            )
-
-            result = translator.translate(
-                text
-            )
-
-            result = clean_text(result)
-
-            if has_sinhala(result):
-
-                cache[key] = result
-
-                save_translation_cache(
-                    cache
-                )
-
-                return result
-
-            last_error = Exception(
-                "Translation returned "
-                "no Sinhala text."
-            )
-
-        except Exception as e:
-
-            last_error = e
-
-            print(
-                "Translate Error "
-                f"(attempt {attempt + 1}/"
-                f"{TRANSLATE_RETRIES}):",
-                e
-            )
-
-            if is_rate_limit_error(e):
-
-                wait_seconds = (
-                    8 * (attempt + 1)
-                )
-
-            else:
-
-                wait_seconds = (
-                    3 * (attempt + 1)
-                )
-
-            if (
-                attempt
-                < TRANSLATE_RETRIES - 1
-            ):
-
-                time.sleep(
-                    wait_seconds
-                )
-
-    if last_error:
-
         print(
-            "Translation failed "
-            "after retries:",
-            last_error
+            "Translation cache hit."
         )
+
+        return cached
+
+    result = libretranslate_request(
+        text
+    )
+
+    if result:
+
+        cache[key] = result
+
+        save_translation_cache(
+            cache
+        )
+
+        return result
 
     return ""
 
@@ -323,164 +389,19 @@ def translate_batch(texts):
     if not texts:
         return []
 
-    cleaned = [
-        shorten(text, 1200)
-        for text in texts
-    ]
+    results = []
 
-    cache = load_translation_cache()
+    for text in texts:
 
-    results = [
-        ""
-        for _ in cleaned
-    ]
-
-    pending = []
-    pending_indexes = []
-
-    for index, text in enumerate(
-        cleaned
-    ):
-
-        if not text:
-            continue
-
-        key = translation_cache_key(
-            text
-        )
-
-        cached = cache.get(key)
-
-        if cached and has_sinhala(
-            cached
-        ):
-
-            results[index] = cached
-
-        else:
-
-            pending.append(text)
-            pending_indexes.append(index)
-
-    if not pending:
-        return results
-
-    last_error = None
-
-    for attempt in range(
-        TRANSLATE_RETRIES
-    ):
-
-        try:
-
-            wait_for_translation_slot()
-
-            translator = GoogleTranslator(
-                source="auto",
-                target="si"
-            )
-
-            translated = (
-                translator.translate_batch(
-                    pending
-                )
-            )
-
-            if not isinstance(
-                translated,
-                list
-            ):
-
-                translated = list(
-                    translated
-                )
-
-            for (
-                index,
-                original,
-                result
-            ) in zip(
-                pending_indexes,
-                pending,
-                translated
-            ):
-
-                result = clean_text(
-                    result
-                )
-
-                if has_sinhala(result):
-
-                    results[index] = result
-
-                    cache[
-                        translation_cache_key(
-                            original
-                        )
-                    ] = result
-
-            save_translation_cache(
-                cache
-            )
-
-            return results
-
-        except Exception as e:
-
-            last_error = e
-
-            print(
-                "Batch Translate Error "
-                f"(attempt {attempt + 1}/"
-                f"{TRANSLATE_RETRIES}):",
-                e
-            )
-
-            if is_rate_limit_error(e):
-
-                wait_seconds = (
-                    10 * (attempt + 1)
-                )
-
-            else:
-
-                wait_seconds = (
-                    4 * (attempt + 1)
-                )
-
-            if (
-                attempt
-                < TRANSLATE_RETRIES - 1
-            ):
-
-                time.sleep(
-                    wait_seconds
-                )
-
-    print(
-        "Batch translation failed "
-        "after retries:",
-        last_error
-    )
-
-    # Individual translation fallback.
-    for index, text in zip(
-        pending_indexes,
-        pending
-    ):
-
-        if results[index]:
-            continue
-
-        results[index] = translate(
-            text
+        results.append(
+            translate(text)
         )
 
     return results
 
 
 # ============================================================
-# DOWNLOAD FILE
+# DOWNLOAD
 # ============================================================
 
 def download(
@@ -522,7 +443,6 @@ def download(
                 )
 
                 if folder:
-
                     os.makedirs(
                         folder,
                         exist_ok=True
@@ -542,7 +462,7 @@ def download(
         except Exception as e:
 
             print(
-                "Download Error "
+                "Download error "
                 f"(attempt {attempt + 1}/"
                 f"{retry}):",
                 e
@@ -624,7 +544,7 @@ def save_used(
 
 
 # ============================================================
-# NEWS ID
+# NEWS HASH
 # ============================================================
 
 def news_hash(link):
